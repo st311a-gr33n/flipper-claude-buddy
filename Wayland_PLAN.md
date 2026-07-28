@@ -103,6 +103,7 @@ def _is_wayland() -> bool:
 **Claude Sessions**
 claude --resume 53106784-65b3-4ae5-9045-fb7b5bf36ec4
 claude --resume 8e7903d3-bc4b-40c4-804b-592b177d2732
+claude --resume 7d2e03e9-6d00-4402-b187-e63c2a945aad
 
 **Opencode Sessions**
 opencode -s ses_05ea09482ffexasQaas67eEy44

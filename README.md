@@ -238,6 +238,51 @@ flipper-cursor-buddy/     Cursor hooks + host bridge
 
 See [CLAUDE.md](CLAUDE.md) for build commands, architecture, protocol details, and release checklist.
 
+### Updating the host bridge plugin during development
+
+When you modify `plugin/host-bridge/` in this repo, Claude Code does **not** automatically pick up the changes — it runs the bridge from its own plugin copy at `~/.claude/plugins/`. To test your changes, you need to update that copy.
+
+#### One-time setup: editable install (recommended)
+
+Symlink your repo into the marketplace so code changes take effect immediately without copying each time:
+
+```bash
+# Remove the marketplace copy and symlink to your repo
+rm -rf ~/.claude/plugins/marketplaces/flipper-claude-buddy/plugin/host-bridge
+ln -s "$(pwd)/plugin/host-bridge" ~/.claude/plugins/marketplaces/flipper-claude-buddy/plugin/host-bridge
+
+# Install as editable in the plugin's venv
+~/.claude/plugins/data/flipper-claude-buddy-flipper-claude-buddy/venv/bin/pip install -e \
+  ~/.claude/plugins/marketplaces/flipper-claude-buddy/plugin/host-bridge/
+
+# Restart the bridge so it loads the new code
+kill $(cat /tmp/claude-flipper-bridge.pid)
+```
+
+After this, any code change you make is live — just restart the bridge.
+
+#### One-off update (no symlink)
+
+If you prefer not to symlink, copy and reinstall each time:
+
+```bash
+cp -r plugin/host-bridge/* ~/.claude/plugins/marketplaces/flipper-claude-buddy/plugin/host-bridge/
+~/.claude/plugins/data/flipper-claude-buddy-flipper-claude-buddy/venv/bin/pip install \
+  ~/.claude/plugins/marketplaces/flipper-claude-buddy/plugin/host-bridge/
+kill $(cat /tmp/claude-flipper-bridge.pid)
+```
+
+Claude Code restarts the bridge automatically on the next session.
+
+#### Restart shortcut
+
+```bash
+kill $(cat /tmp/claude-flipper-bridge.pid)
+# Claude Code auto-restarts the bridge when needed
+```
+
+Check the bridge loaded correctly: `tail -f /tmp/claude-flipper-bridge.log`
+
 ## Support
 
 If you find this useful, consider [buying the maintainer a coffee](https://ko-fi.com/jxw1102).
