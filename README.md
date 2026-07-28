@@ -89,7 +89,7 @@ The plugin starts the host bridge automatically on each Claude Code session. Con
 ```json
 {
   "transport": "ble",           // "auto", "usb", or "ble"
-  "bluetoothName": "Omachal"   // your Flipper's BLE name (required for BLE)
+  "bluetoothName": "Flipper-name"   // your Flipper's BLE name (required for BLE)
 }
 ```
 
@@ -98,7 +98,7 @@ The plugin starts the host bridge automatically on each Claude Code session. Con
 ```bash
 cd plugin/host-bridge
 pip3 install -e ".[bt]"
-python3 -m bridge --transport ble --flipper "Omachal" --log-level info
+python3 -m bridge --transport ble --flipper "Flipper-name" --log-level info
 ```
 
 Use `--flipper` or the `FLIPPER_BT_NAME` env var when your Flipper has a custom BLE name.
@@ -182,10 +182,10 @@ The daemon must stay running while the bridge is active. On Wayland the terminal
 
 ```bash
 # Via CLI flag:
-python3 -m bridge --transport ble --flipper "Omachal"
+python3 -m bridge --transport ble --flipper "Flipper-name"
 
 # Or via environment variable:
-FLIPPER_BT_NAME="Omachal" python3 -m bridge --transport ble
+FLIPPER_BT_NAME="Flipper-name" python3 -m bridge --transport ble
 ```
 
 When running through the Claude Code plugin, set the name in `~/.claude/settings.json` (`bluetoothName` option under `flipper-claude-buddy`).
