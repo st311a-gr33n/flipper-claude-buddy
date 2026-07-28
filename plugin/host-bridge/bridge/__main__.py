@@ -1,4 +1,4 @@
-"""Entry point: python -m bridge  [--transport usb|ble]"""
+"""Entry point: python -m bridge  [--transport usb|ble] [--flipper NAME]"""
 
 import argparse
 import asyncio
@@ -41,12 +41,19 @@ def main():
         help="Communication transport (default: %(default)s)",
     )
     parser.add_argument(
+        "--flipper",
+        default="",
+        help="BLE device name (e.g. 'Omachal'; overrides FLIPPER_BT_NAME env)",
+    )
+    parser.add_argument(
         "--log-level",
         choices=["debug", "info", "warning", "error"],
         default=os.environ.get("FLIPPER_LOG_LEVEL", "info"),
         help="Log level (default: info, env: FLIPPER_LOG_LEVEL)",
     )
     args = parser.parse_args()
+    if args.flipper:
+        config.BT_DEVICE_NAME = args.flipper
 
     logging.basicConfig(
         level=getattr(logging, args.log_level.upper()),

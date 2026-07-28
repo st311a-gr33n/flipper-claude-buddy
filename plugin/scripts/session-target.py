@@ -83,6 +83,11 @@ def detect_tty() -> str:
 
 def build_target() -> dict[str, str]:
     term_program = (os.environ.get("TERM_PROGRAM") or "").strip()
+    # Only X11 sets WINDOWID (VTE terminals). Wayland has no equivalent.
+    _wayland = (
+        os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+        or bool(os.environ.get("WAYLAND_DISPLAY", ""))
+    )
     target = {
         "app_name": TERM_PROGRAM_APP_NAMES.get(term_program, term_program),
         "term_program": term_program,
@@ -91,7 +96,8 @@ def build_target() -> dict[str, str]:
         "tty": detect_tty(),
         # X11 window ID — set by VTE-based terminals (gnome-terminal, kitty, etc.)
         # Used by XdotoolInputBackend on Linux to focus the correct window.
-        "window_id": (os.environ.get("WINDOWID") or "").strip(),
+        # Not available on Wayland.
+        "window_id": "" if _wayland else (os.environ.get("WINDOWID") or "").strip(),
     }
     material = json.dumps(target, sort_keys=True, separators=(",", ":")).encode()
     target["session_key"] = hashlib.sha1(material).hexdigest()[:16]

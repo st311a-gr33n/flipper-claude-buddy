@@ -84,7 +84,24 @@ claude plugin marketplace add jxw1102/flipper-claude-buddy
 claude plugin install flipper-claude-buddy@flipper-claude-buddy
 ```
 
-The plugin starts the host bridge automatically on each Claude Code session. Configure transport in the plugin settings (`auto`, `usb`, or `ble`).
+The plugin starts the host bridge automatically on each Claude Code session. Configure transport in `~/.claude/settings.json` under `pluginConfigs → flipper-claude-buddy → options`:
+
+```json
+{
+  "transport": "ble",           // "auto", "usb", or "ble"
+  "bluetoothName": "Omachal"   // your Flipper's BLE name (required for BLE)
+}
+```
+
+**Running the bridge manually** (for testing or standalone use):
+
+```bash
+cd plugin/host-bridge
+pip3 install -e ".[bt]"
+python3 -m bridge --transport ble --flipper "Omachal" --log-level info
+```
+
+Use `--flipper` or the `FLIPPER_BT_NAME` env var when your Flipper has a custom BLE name.
 
 #### OpenAI Codex
 
@@ -115,6 +132,18 @@ Once paired, Claude Desktop auto-reconnects when both sides are online.
 
 CLI bridges connect over USB (plug-and-play) or Bluetooth LE. USB is preferred when the cable is plugged in; bridges fall back to BLE automatically when configured for `auto`.
 
+**Bridge CLI arguments:**
+
+```text
+python3 -m bridge [--transport auto|usb|ble] [--flipper NAME] [--log-level debug|info|warning|error]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--transport` | `auto` | Transport to use: `auto` (USB first, fallback BLE), `usb`, or `ble` |
+| `--flipper` | *(env: `FLIPPER_BT_NAME`)* | BLE device name — overrides the scan prefix from "Flipper" to your device's name |
+| `--log-level` | `info` | Log verbosity. Use `debug` for diagnosing BLE connection issues |
+
 **macOS — Bluetooth pairing:** accept the pairing prompt on first BLE connect. If pairing fails after a firmware flash, remove the Flipper from System Settings → Bluetooth and re-pair.
 
 **macOS — Accessibility (keystroke forwarding):** grant your terminal app Accessibility permission in System Settings → Privacy & Security → Accessibility. Without it, status updates work but button presses do nothing.
@@ -126,9 +155,40 @@ sudo usermod -aG dialout $USER   # log out and back in
 export FLIPPER_TRANSPORT=usb     # recommended on Linux
 ```
 
-**Linux — Keystroke forwarding:** requires `xdotool` on X11 (`sudo apt install xdotool`). Wayland is not yet supported.
+**Linux — Keystroke forwarding:**
 
-**Linux — BLE:** experimental; USB is the reliable path today.
+| Display server | Tool | Install |
+|---|---|---|
+| Wayland (GNOME, KDE, Sway, …) | `ydotool` | `sudo apt install ydotool ydotoold` |
+| Wayland (wlroots: Sway, Hyprland) | `wtype` | `sudo apt install wtype` |
+| X11 | `xdotool` | `sudo apt install xdotool` |
+
+**Wayland users:** start the `ydotoold` daemon before running the bridge:
+```bash
+sudo ydotoold &
+```
+The daemon must stay running while the bridge is active. On Wayland the terminal window must have keyboard focus — programmatic window focusing is not available.
+
+**Linux — BLE:** functional via BlueZ (the `bleak` library). USB is preferred for reliability.
+
+**Requirements:**
+- **BlueZ ≥ 5.72** (check with `bluetoothctl --version`). Older versions don't support the `--agent` flag needed for automated pairing.
+- **Bluetooth powered on:** `bluetoothctl power on`
+- **Flipper advertising:** launch Claude Buddy on the Flipper; the app advertises the bridge serial service (UUID `0x3082`).
+
+**BLUETOOTH PAIRING IS NOT REQUIRED.** The Flipper app uses a non-authenticated BLE serial profile that allows GATT access without pairing. This avoids complex BlueZ agent management.
+
+**Custom device name:** If your Flipper has been renamed from the default "Flipper", specify the name explicitly:
+
+```bash
+# Via CLI flag:
+python3 -m bridge --transport ble --flipper "Omachal"
+
+# Or via environment variable:
+FLIPPER_BT_NAME="Omachal" python3 -m bridge --transport ble
+```
+
+When running through the Claude Code plugin, set the name in `~/.claude/settings.json` (`bluetoothName` option under `flipper-claude-buddy`).
 
 ## Host identification protocol
 
@@ -145,10 +205,16 @@ Allowed values: `claude`, `codex`, `cursor`. The Flipper shows the label in the 
 | Problem | Fix |
 |---------|-----|
 | Flipper not found over USB | Stop other bridges and apps using the serial port (qFlipper, another agent bridge). Set `FLIPPER_SERIAL_PORT` explicitly. |
+| Flipper not found over BLE | Ensure Bluetooth is on (`bluetoothctl power on`). The Flipper must be running Claude Buddy and in Bridge mode. Check the BLE device name matches `--flipper` / `FLIPPER_BT_NAME`. |
+| BLE connection fails with `AuthenticationFailed` | You are running an older version of the Flipper app. Rebuild with `ufbt build && ufbt launch` — the latest `bridge_profile.c` uses non-authenticated characteristics. |
+| BLE connection fails with `org.bluez.Error` | Ensure BlueZ ≥ 5.72. If pairing is required, run `bluetoothctl --agent NoInputNoOutput` and `pair <MAC>` manually, then restart the bridge. |
+| Bridge connects but Flipper buttons do nothing (BLE) | Update the Flipper app — an older build may have a race in `transport_bt.c` where `bt_set_status_changed_callback` was registered after advertising, causing `bt->connected` to stay `false`. Rebuild with `ufbt build && ufbt launch`. |
+| Bridge manual session: Flipper connects but no Claude interaction | Send `claude_connect` via IPC: `echo '{"action":"claude_connect","project_dir":"'$(pwd)'"}' \| nc -U /tmp/<agent>-flipper-bridge.sock`. When running through the plugin, this is handled automatically by `on-session-start.sh`. |
 | Wrong agent label / no label | Restart the bridge after flashing a new FAP. Ensure the bridge sends `host` in `state` messages. |
 | No sound on task complete | Check bridge log: `tail -f /tmp/<agent>-flipper-bridge.log` |
 | Buttons do nothing (macOS) | Grant Accessibility permission to your terminal app. |
-| Buttons do nothing (Linux) | Install `xdotool`; focus the terminal window. |
+| Buttons do nothing (Linux X11) | Install `xdotool`; focus the terminal window. |
+| Buttons do nothing (Linux Wayland) | Install `ydotool` + `ydotoold`; start the daemon with `sudo ydotoold &`; keep the terminal focused. |
 | Parse errors / CLI banner in log | The Flipper is running the CLI app, not Claude Buddy — open the buddy FAP and restart the bridge. |
 
 Bridge logs:

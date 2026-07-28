@@ -163,12 +163,12 @@ Inspect bridge activity: `tail -f /tmp/<agent>-flipper-bridge.log`
 | Feature | macOS | Linux |
 |---------|-------|-------|
 | USB transport | `/dev/cu.usbmodem*` | `/dev/ttyACM*` (auto-detected) |
-| BLE transport | ✓ | experimental |
-| Keystroke forwarding | AppleScript (`osascript`) | `xdotool` (X11 only) |
-| Wayland keystroke | ✗ | not yet supported (`ydotool` needed) |
+| BLE transport | ✓ | functional (BlueZ via `bleak`) |
+| Keystroke forwarding | AppleScript (`osascript`) | auto-detected: `ydotool` (Wayland), `wtype` (wlroots), or `xdotool` (X11) |
+| Wayland keystroke | ✗ | `ydotool` (any compositor) or `wtype` (wlroots only) |
 | Dictation | macOS native | disabled by default; `FLIPPER_DICTATION_BACKEND=custom` |
 
-On Linux, `WINDOWID` (VTE terminals like gnome-terminal and kitty) is used by `xdotool` to focus the correct window.
+On Linux, `WINDOWID` (VTE terminals like gnome-terminal and kitty) is used by `xdotool` to focus the correct window on X11. On Wayland, `WINDOWID` is not set and window focusing is not available — the terminal must have keyboard focus.
 
 ## Command Menu System
 

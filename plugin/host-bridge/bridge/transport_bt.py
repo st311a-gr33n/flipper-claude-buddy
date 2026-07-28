@@ -4,10 +4,13 @@ Bluetooth BLE transport — uses bleak to talk to the Flipper Zero BLE serial se
 Connection flow:
   1. Scan for a BLE device advertising config.FLIPPER_ADV_UUID (0x3082), falling back
      to a name prefix match against config.BT_DEVICE_NAME ("Flipper")
-  2. Connect and look for the Flipper's Serial-over-BLE GATT service
-  3. Use the known serial characteristic for both notify (RX) and write (TX)
-  4. Subscribe to notifications on the serial characteristic
-  5. Incoming notifications are buffered; readline() returns complete lines
+  2. On Linux: pre-pair / trust the device via bluetoothctl so BlueZ allows
+     GATT service discovery (best-effort; pairing failures are non-fatal)
+  3. Connect to the device (up to 3 retries with backoff for BlueZ GATT issues)
+  4. Look for the Flipper's Serial-over-BLE GATT service
+  5. Verify the known serial characteristics for notify (RX) and write (TX)
+  6. Subscribe to notifications on the serial characteristic
+  7. Incoming notifications are buffered; readline() returns complete lines
 
 Flipper BLE Serial UUIDs (official and Momentum firmware):
   Adv UUID: 00003082-0000-1000-8000-00805f9b34fb  (advertised service, used for scan)
@@ -29,6 +32,102 @@ log = logging.getLogger(__name__)
 FLIPPER_SERIAL_TX_UUID = "19ed82ae-ed21-4c9d-4145-228e61fe0000"  # Flipper→host (notify)
 FLIPPER_SERIAL_RX_UUID = "19ed82ae-ed21-4c9d-4145-228e62fe0000"  # host→Flipper (write)
 
+
+# ---------------------------------------------------------------------------
+# BlueZ cache helper (Linux only)
+# ---------------------------------------------------------------------------
+
+async def _bluetoothctl_session(cmds: list[str], timeout: float = 10.0) -> tuple[int, str]:
+    """Run bluetoothctl commands in a session with a NoInputNoOutput agent.
+
+    Commands are sent via stdin and the process stays alive until they
+    complete.  For the ``pair`` command specifically, use
+    ``_bluetoothctl_pair()`` instead — it needs a dedicated process so
+    the agent isn't torn down before the async pairing handshake finishes.
+
+    Returns ``(rc, output_text)``.
+    """
+    import shutil
+    if not shutil.which("bluetoothctl"):
+        return -1, "bluetoothctl not found"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "bluetoothctl", "--agent", "NoInputNoOutput",
+            "--timeout", str(int(timeout)),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        input_str = "\n".join(cmd for cmd in cmds if cmd) + "\nquit\n"
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(input_str.encode()), timeout=timeout + 5,
+        )
+        return proc.returncode or 0, (stdout + stderr).decode(errors="replace")
+    except asyncio.TimeoutError:
+        return -1, "timed out"
+    except Exception as exc:
+        return -1, str(exc)
+
+
+async def _bluetoothctl_pair(address: str, timeout: float = 25.0) -> str:
+    """Pair with a BLE device.  Runs ``pair`` in a dedicated bluetoothctl
+    process whose ``--agent`` stays alive for the full pairing handshake.
+
+    Returns the raw stdout+stderr output text (exit code is not meaningful
+    because ``pair`` success is determined by output keywords).
+    """
+    proc = await asyncio.create_subprocess_exec(
+        "bluetoothctl", "--agent", "NoInputNoOutput",
+        "--timeout", str(int(timeout)),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await asyncio.wait_for(
+        proc.communicate(f"pair {address}\n".encode()), timeout=timeout + 5,
+    )
+    return (stdout + stderr).decode(errors="replace")
+
+
+async def _bluetoothctl_clear(address: str) -> None:
+    """Remove any stale BlueZ device entry.
+
+    A stale (possibly incomplete) GATT database from a previous
+    connection can cause "Failed to discover services" on later
+    connects.  Agent/pairing setup is handled by ``--agent`` on the
+    bluetoothctl session; we don't pre-pair here because the bond
+    can confuse the Flipper's BLE stack on reconnect
+    (UNLIKELY_ERROR on CCCD writes).
+    """
+    rc, out = await _bluetoothctl_session(["pairable on", f"remove {address}"])
+    log.debug("BT: bluetoothctl session (pairable on, remove %s) → rc=%d", address, rc)
+
+
+async def _bluetoothctl_pair_fallback(address: str) -> bool:
+    """Pair + trust a BLE device for BlueZ versions that refuse service
+    discovery on unpaired devices.  Returns True if pairing succeeded.
+
+    Call ONLY as a fallback when the first connection attempt fails with
+    a service-discovery error.  Pairing creates a bond that can cause
+    ``UNLIKELY_ERROR`` on CCCD writes against the Flipper's BLE stack,
+    so we avoid it unless necessary.
+    """
+    log.info("BT: fallback — pairing %s via bluetoothctl…", address)
+    out = await _bluetoothctl_pair(address)
+    ok = "Pairing successful" in out or "Paired: yes" in out
+    if ok:
+        log.info("BT: paired with %s", address)
+        await _bluetoothctl_session([f"trust {address}"])
+    else:
+        log.info("BT: pair %s FAILED — output:\n%s", address, out.strip())
+    # Give the Flipper time to restart advertising after the pair→disconnect.
+    await asyncio.sleep(1.0)
+    return ok
+
+
+# ---------------------------------------------------------------------------
+# BtTransport
+# ---------------------------------------------------------------------------
 
 class BtTransport(Transport):
     def __init__(self):
@@ -71,40 +170,133 @@ class BtTransport(Transport):
             return False
 
         log.info("BT: found %s (%s)", device.name, device.address)
-        self._client = BleakClient(device, disconnected_callback=self._on_disconnect)
-        try:
-            await self._client.connect()
-        except Exception as e:
-            log.error("BT: connect to %s failed: %s", device.name, e)
-            self._client = None
-            return False
 
-        # Verify the serial characteristics exist
-        try:
-            tx_char = self._client.services.get_characteristic(self._tx_uuid)
-            rx_char = self._client.services.get_characteristic(self._rx_uuid)
-        except Exception:
-            tx_char = rx_char = None
-        if tx_char is None or rx_char is None:
-            log.error(
-                "BT: serial characteristics not found on %s — "
-                "is the Flipper running a compatible app?",
-                device.name,
+        # Clear any stale BlueZ device cache so GATT handles are
+        # re-discovered fresh.  We deliberately do NOT pre-pair here:
+        # pairing creates a bond that can confuse the Flipper's BLE
+        # stack on reconnect (UNLIKELY_ERROR on CCCD writes).
+        await _bluetoothctl_clear(device.address)
+
+        # Connect with retries for BlueZ GATT flakiness.
+        # Up to 3 attempts with increasing backoff (1.5s, 3s, 4.5s).
+        # Retry loop covers connect, GATT service discovery, and notify
+        # subscription — all three can fail transiently on BlueZ.
+        paired_fallback = False
+        last_error = ""
+        for attempt in range(3):
+            self._closed = False  # reset from any previous attempt's disconnect
+            self._client = BleakClient(
+                device.address, disconnected_callback=self._on_disconnect,
             )
-            await self._client.disconnect()
-            self._client = None
-            return False
+            try:
+                await self._client.connect()
+            except Exception as exc:
+                last_error = str(exc)
+                self._client = None
+                # Some BlueZ versions refuse service discovery on unpaired
+                # devices ("failed to discover services, device
+                # disconnected").  Pair+trust once as a fallback and
+                # retry — the bond will persist for the next attempt.
+                if ("discover" in last_error.lower()) and not paired_fallback:
+                    log.warning(
+                        "BT: connect attempt %d/3 failed (needs pairing?): %s",
+                        attempt + 1, exc,
+                    )
+                    paired_fallback = await _bluetoothctl_pair_fallback(device.address)
+                    continue
+                if "device disconnected" in last_error.lower() or \
+                   "discover" in last_error.lower():
+                    wait = 1.5 * (attempt + 1)
+                    log.warning(
+                        "BT: connect attempt %d/3 failed (BlueZ GATT issue): %s — "
+                        "retrying in %.1fs…",
+                        attempt + 1, exc, wait,
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                log.error("BT: connect to %s failed: %s", device.name, exc)
+                return False
 
-        log.info("BT: serial service found  TX=%s  RX=%s", self._tx_uuid, self._rx_uuid)
-        log.info("BT: RX char properties: %s", rx_char.properties)
-        mtu = getattr(self._client, "mtu_size", 23)
-        log.info("BT: negotiated MTU=%d  (write chunk=%d)", mtu, max(1, min(mtu - 3, config.BT_WRITE_CHUNK)))
+            # GATT connect succeeded — verify characteristics and subscribe.
+            # These can also fail transiently (e.g. "Unlikely Error" during
+            # start_notify on BlueZ).  Treat them as retryable, not fatal.
+            try:
+                tx_char = self._client.services.get_characteristic(self._tx_uuid)
+                rx_char = self._client.services.get_characteristic(self._rx_uuid)
+            except Exception:
+                tx_char = rx_char = None
+            if tx_char is None or rx_char is None:
+                log.warning(
+                    "BT: attempt %d/3 — serial characteristics not found on %s, "
+                    "retrying…",
+                    attempt + 1, device.name,
+                )
+                try:
+                    await self._client.disconnect()
+                except Exception:
+                    pass
+                self._client = None
+                await asyncio.sleep(1.5 * (attempt + 1))
+                continue
 
-        await self._client.start_notify(self._tx_uuid, self._on_notify)
-        self._closed = False
-        self._rx_buf.clear()
-        log.info("BT: connected to %s", device.name)
-        return True
+            log.info("BT: serial service found  TX=%s  RX=%s", self._tx_uuid, self._rx_uuid)
+            log.info("BT: TX char properties: %s", tx_char.properties)
+            log.info("BT: RX char properties: %s", rx_char.properties)
+            mtu = getattr(self._client, "mtu_size", 23)
+            log.info("BT: negotiated MTU=%d  (write chunk=%d)",
+                     mtu, max(1, min(mtu - 3, config.BT_WRITE_CHUNK)))
+
+            try:
+                await self._client.start_notify(self._tx_uuid, self._on_notify)
+            except Exception as exc:
+                err_str = str(exc)
+                # If we paired and still get UNLIKELY_ERROR, the bond is
+                # the culprit — remove it and retry without bonding.
+                if "unlikely" in err_str.lower() and paired_fallback:
+                    log.warning(
+                        "BT: attempt %d/3 — start_notify failed after pairing "
+                        "(UNLIKELY_ERROR, bond interference): %s — "
+                        "removing bond and retrying…",
+                        attempt + 1, exc,
+                    )
+                    paired_fallback = False
+                    try:
+                        await self._client.disconnect()
+                    except Exception:
+                        pass
+                    self._client = None
+                    await _bluetoothctl_clear(device.address)
+                    continue
+                log.warning(
+                    "BT: attempt %d/3 — start_notify failed (BlueZ GATT error): %s — "
+                    "retrying…",
+                    attempt + 1, exc,
+                )
+                try:
+                    await self._client.disconnect()
+                except Exception:
+                    pass
+                self._client = None
+                await asyncio.sleep(1.5 * (attempt + 1))
+                continue
+
+            # All good — finish handshake
+            self._closed = False
+            self._rx_buf.clear()
+            log.info("BT: connected to %s", device.name)
+            return True
+
+        # Exhausted all retries
+        log.error(
+            "BT: connect to %s failed after 3 attempts.\n"
+            "Last error: %s\n"
+            "Try manually:  bluetoothctl remove %s && "
+            "bluetoothctl pair %s && bluetoothctl trust %s\n"
+            "Then restart the bridge.",
+            device.name, last_error, device.address, device.address, device.address,
+        )
+        self._client = None
+        return False
 
     async def readline(self) -> bytes:
         """Block until a complete \\n-terminated line arrives via BLE notify."""

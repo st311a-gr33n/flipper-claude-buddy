@@ -18,11 +18,25 @@ Call ``create_backend()`` to obtain the configured backend instance.
 
 import asyncio
 import logging
+import os
 import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Wayland / X11 detection
+# ---------------------------------------------------------------------------
+
+def _is_wayland() -> bool:
+    """Return True if running under a Wayland session."""
+    if os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland":
+        return True
+    if os.environ.get("WAYLAND_DISPLAY", ""):
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -317,11 +331,19 @@ class NullInputBackend(InputBackend):
     def _warn(self) -> None:
         if not NullInputBackend._warned:
             NullInputBackend._warned = True
-            log.warning(
-                "No input backend available on this platform — "
-                "Flipper button-to-keystroke forwarding is disabled. "
-                "On Linux install xdotool (apt install xdotool) to enable it."
-            )
+            if _is_wayland():
+                log.warning(
+                    "No input backend available on Wayland — "
+                    "Flipper button-to-keystroke forwarding is disabled. "
+                    "Install ydotool: sudo apt install ydotool ydotoold && "
+                    "sudo ydotoold &"
+                )
+            else:
+                log.warning(
+                    "No input backend available on this platform — "
+                    "Flipper button-to-keystroke forwarding is disabled. "
+                    "On Linux install xdotool (apt install xdotool) to enable it."
+                )
 
     async def send_ctrl_c(self) -> None:
         self._warn()
@@ -458,6 +480,219 @@ class XdotoolInputBackend(InputBackend):
 
 
 # ---------------------------------------------------------------------------
+# Linux Wayland — ydotool backend (universal: GNOME, KDE, Sway, Hyprland, …)
+# ---------------------------------------------------------------------------
+
+# Mapping from abstract key names to Linux input event codes used by ydotool
+_YDOTOOL_KEY_CODES: dict[str, int] = {
+    "return":    28,   # KEY_ENTER
+    "escape":    1,    # KEY_ESC
+    "down":      108,  # KEY_DOWN
+    "up":        103,  # KEY_UP
+    "left":      105,  # KEY_LEFT
+    "right":     106,  # KEY_RIGHT
+    "space":     57,   # KEY_SPACE
+    "tab":       15,   # KEY_TAB
+    "backspace": 14,   # KEY_BACKSPACE
+    "page_up":   104,  # KEY_PAGEUP
+    "page_down": 109,  # KEY_PAGEDOWN
+}
+
+# macOS keycode → Linux input event code (only codes actually used by the bridge)
+_MACOS_KEYCODE_TO_LINUX: dict[int, int] = {
+    8:   46,   # c → KEY_C
+    36:  28,   # Return → KEY_ENTER
+    48:  15,   # Tab → KEY_TAB
+    49:  57,   # space → KEY_SPACE
+    51:  14,   # BackSpace → KEY_BACKSPACE
+    53:  1,    # Escape → KEY_ESC
+    116: 104,  # Page Up → KEY_PAGEUP
+    121: 109,  # Page Down → KEY_PAGEDOWN
+    125: 108,  # Down → KEY_DOWN
+}
+
+# macOS modifier phrase → Linux modifier keycode
+_MACOS_MOD_TO_LINUX: dict[str, int] = {
+    "control down": 29,   # KEY_LEFTCTRL
+    "shift down":   42,   # KEY_LEFTSHIFT
+    "option down":  56,   # KEY_LEFTALT
+    "command down": 125,  # KEY_LEFTMETA
+}
+
+
+async def _run_ydotool(args: list[str], context: str) -> None:
+    """Run ydotool and log warnings on failure."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ydotool", *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            message = stderr.decode().strip() or stdout.decode().strip() or f"rc={proc.returncode}"
+            if "Connection refused" in message or "No such file" in message:
+                log.warning(
+                    "%s failed: ydotoold daemon is not running. "
+                    "Start it with: sudo ydotoold &",
+                    context,
+                )
+            else:
+                log.warning("%s failed: %s", context, message)
+    except FileNotFoundError:
+        log.error("%s error: ydotool not found in PATH", context)
+    except Exception as e:
+        log.error("%s error: %s", context, e)
+
+
+class YdotoolInputBackend(InputBackend):
+    """Linux Wayland input backend using ydotool (works with any compositor).
+
+    Requires the ydotoold daemon to be running (``sudo ydotoold &``).
+    On Wayland there is no programmatic window focusing — the target
+    terminal must already have keyboard focus.
+    """
+
+    def __init__(self) -> None:
+        self._target: InputTarget | None = None
+
+    def set_target(self, target: dict[str, str] | None) -> None:
+        self._target = InputTarget.from_payload(target)
+        log.info(
+            "Input target set: %s (Wayland — no window focus control)",
+            self._target.describe() if self._target else "active window",
+        )
+
+    # -- helpers -----------------------------------------------------------
+
+    @staticmethod
+    def _key_seq(code: int) -> list[str]:
+        """Return the press+release argument pair for a single keycode."""
+        return [f"{code}:1", f"{code}:0"]
+
+    @classmethod
+    def _mod_combo(cls, mod_code: int, key_code: int) -> list[str]:
+        """Return press mod, press key, release key, release mod args."""
+        return [f"{mod_code}:1", f"{key_code}:1", f"{key_code}:0", f"{mod_code}:0"]
+
+    # -- InputBackend interface --------------------------------------------
+
+    async def send_ctrl_c(self) -> None:
+        await _run_ydotool(
+            ["key"] + self._mod_combo(29, 46),  # ctrl + c
+            "Ctrl+C",
+        )
+
+    async def send_keystroke(self, key: str) -> None:
+        code = _YDOTOOL_KEY_CODES.get(key)
+        if code is None:
+            log.warning("keystroke(%s): no ydotool mapping, ignoring", key)
+            return
+        await _run_ydotool(["key"] + self._key_seq(code), f"keystroke({key})")
+
+    async def send_text(self, text: str) -> None:
+        await _run_ydotool(["type", "-e", text], "type")
+        await _run_ydotool(["key"] + self._key_seq(28), "Return")
+
+    async def send_chars(self, text: str, *, focus: bool = True) -> None:
+        await _run_ydotool(["type", "-e", text], "type_chars")
+
+    async def send_modified_keystroke(self, key_code: int, modifiers: str) -> None:
+        linux_code = _MACOS_KEYCODE_TO_LINUX.get(key_code)
+        linux_mod = _MACOS_MOD_TO_LINUX.get(modifiers.lower().strip())
+        if linux_code is None:
+            log.warning(
+                "keystroke(code=%s, mod=%s): no ydotool key mapping, ignoring",
+                key_code, modifiers,
+            )
+            return
+        if linux_mod is None:
+            log.warning(
+                "keystroke(code=%s, mod=%s): no ydotool modifier mapping, ignoring",
+                key_code, modifiers,
+            )
+            return
+        await _run_ydotool(
+            ["key"] + self._mod_combo(linux_mod, linux_code),
+            f"keystroke(code={key_code}, mod={modifiers})",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Linux Wayland — wtype backend (wlroots-based compositors only)
+# ---------------------------------------------------------------------------
+
+async def _run_wtype(args: list[str], context: str) -> None:
+    """Run wtype and log warnings on failure."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "wtype", *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            message = stderr.decode().strip() or stdout.decode().strip() or f"rc={proc.returncode}"
+            if "compositor" in message.lower() or "not supported" in message.lower():
+                log.warning(
+                    "%s failed: your Wayland compositor may not support wtype. "
+                    "wtype only works on wlroots-based compositors (Sway, Hyprland). "
+                    "Try ydotool instead: sudo apt install ydotool ydotoold",
+                    context,
+                )
+            else:
+                log.warning("%s failed: %s", context, message)
+    except FileNotFoundError:
+        log.error("%s error: wtype not found in PATH", context)
+    except Exception as e:
+        log.error("%s error: %s", context, e)
+
+
+class WtypeInputBackend(InputBackend):
+    """Linux Wayland input backend using wtype (wlroots compositors only).
+
+    Falls back to no-op with a clear warning on non-wlroots compositors
+    such as GNOME/Mutter or KDE/KWin.
+    """
+
+    def __init__(self) -> None:
+        self._target: InputTarget | None = None
+
+    def set_target(self, target: dict[str, str] | None) -> None:
+        self._target = InputTarget.from_payload(target)
+        log.info(
+            "Input target set: %s (Wayland — no window focus control)",
+            self._target.describe() if self._target else "active window",
+        )
+
+    async def send_ctrl_c(self) -> None:
+        await _run_wtype(["-M", "ctrl", "c", "-m", "ctrl"], "Ctrl+C")
+
+    async def send_keystroke(self, key: str) -> None:
+        name = _XDOTOOL_KEY_NAMES.get(key, key)
+        await _run_wtype(["-k", name], f"keystroke({key})")
+
+    async def send_text(self, text: str) -> None:
+        await _run_wtype(["--", text], "type")
+        await _run_wtype(["-k", "Return"], "Return")
+
+    async def send_chars(self, text: str, *, focus: bool = True) -> None:
+        await _run_wtype(["--", text], "type_chars")
+
+    async def send_modified_keystroke(self, key_code: int, modifiers: str) -> None:
+        xsym = _MACOS_KEYCODE_TO_XSYM.get(key_code, str(key_code))
+        wmod = _MACOS_MOD_TO_XDOTOOL.get(modifiers.lower().strip())
+        if wmod is None:
+            log.warning(
+                "keystroke(code=%s, mod=%s): no wtype modifier mapping, ignoring",
+                key_code, modifiers,
+            )
+            return
+        await _run_wtype(["-M", wmod, xsym, "-m", wmod],
+                         f"keystroke(code={key_code}, mod={modifiers})")
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
@@ -466,9 +701,28 @@ def create_backend() -> InputBackend:
         return AppleScriptInputBackend()
     if sys.platform == "linux":
         import shutil
+        if _is_wayland():
+            # Wayland — prefer ydotool (any compositor), then wtype (wlroots)
+            if shutil.which("ydotool"):
+                log.info("Input backend: ydotool (Linux Wayland)")
+                return YdotoolInputBackend()
+            if shutil.which("wtype"):
+                log.info("Input backend: wtype (Linux Wayland — wlroots compositors only)")
+                return WtypeInputBackend()
+            log.warning(
+                "Wayland detected but no input tool found — "
+                "keystroke forwarding disabled. "
+                "Install ydotool: sudo apt install ydotool ydotoold && "
+                "sudo ydotoold &"
+            )
+            return NullInputBackend()
+        # X11 — prefer xdotool, fall back to ydotool (also works on X11 via uinput)
         if shutil.which("xdotool"):
             log.info("Input backend: xdotool (Linux X11)")
             return XdotoolInputBackend()
+        if shutil.which("ydotool"):
+            log.info("Input backend: ydotool (Linux X11 fallback — uinput)")
+            return YdotoolInputBackend()
         log.warning(
             "xdotool not found — keystroke forwarding disabled. "
             "Install it with: sudo apt install xdotool"

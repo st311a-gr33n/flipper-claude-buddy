@@ -14,6 +14,7 @@ App(
         "protocol.c",
         "serial.c",        # USB transport (transport_usb_alloc)
         "transport_bt.c",  # BT transport  (transport_bt_alloc)
+        "bridge_profile.c",# Non-secured BLE serial profile  (ble_profile_bridge)
         "nus_profile.c",   # Nordic UART Service profile (Claude Desktop/Cowork)
         "transport_nus.c", # NUS transport (transport_nus_alloc)
         "nus_protocol.c",  # Anthropic Hardware Buddy wire protocol
