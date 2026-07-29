@@ -191,21 +191,19 @@ class Daemon:
             await self.serial.send(protocol.status_msg(text, sub))
             return {"status": "ok"}
 
-        elif action == "claude_connect":
-            # Update project dir if provided (may differ from bridge startup)
+        elif action in ("claude_connect", "opencode_connect"):
             project_dir = request.get("project_dir", "")
             if project_dir:
                 config.PROJECT_DIR = project_dir
                 log.info("Updated PROJECT_DIR to %s", project_dir)
             self._claude_connected = True
             await self.serial.send(protocol.state_msg(True))
-            # Refresh commands for the (possibly new) project
             commands = self._load_commands()
             if commands and self.serial.connected:
                 await self.serial.send(protocol.menu_msg(commands))
             return {"status": "ok"}
 
-        elif action == "claude_disconnect":
+        elif action in ("claude_disconnect", "opencode_disconnect"):
             await self._stop_space_repeat()
             self._claude_connected = False
             await self.serial.send(protocol.state_msg(False))

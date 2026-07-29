@@ -85,7 +85,29 @@ Use `--flipper` or the `FLIPPER_BT_NAME` env var when your Flipper has a custom 
 
 The plugin starts automatically with every Claude Code session and stops when you close it.
 
-### 3. Launch Claude Buddy on your Flipper
+### 3. Install the OpenCode plugin (optional)
+
+> **Requires OpenCode installed.** The plugin is a JavaScript module installed in your project's `.opencode/plugins/` directory.
+
+```bash
+# From your project root (where you run opencode):
+mkdir -p .opencode/plugins
+
+# Symlink the plugin into your opencode plugins directory:
+ln -s /path/to/flipper-claude-buddy/flipper-opencode-buddy/plugin/index.js .opencode/plugins/flipper-opencode-buddy.js
+```
+
+The plugin starts the bridge automatically when an opencode session begins and stops it when the session ends. It forwards tool execution sounds, permission requests, and status updates to the Flipper.
+
+**Running the bridge manually** (for testing or standalone use):
+
+```bash
+cd flipper-opencode-buddy/host-bridge
+pip3 install -e /path/to/flipper-claude-buddy/plugin/host-bridge
+python3 -m bridge --transport ble --flipper "Flipper-name"
+```
+
+### 4. Launch Claude Buddy on your Flipper
 
 Go to **Applications → USB → Claude Buddy**. You'll hear the startup fanfare when the connection is established.
 
@@ -161,7 +183,7 @@ When running through the Claude Code plugin, set the name in `~/.claude/settings
 | BLE connection fails with `AuthenticationFailed` | You are running an older version of the Flipper app. Rebuild with `ufbt build && ufbt launch` — the latest `bridge_profile.c` uses non-authenticated characteristics. |
 | BLE connection fails with `org.bluez.Error` | Ensure BlueZ ≥ 5.72. If pairing is required, run `bluetoothctl --agent NoInputNoOutput` and `pair <MAC>` manually, then restart the bridge. |
 | Bridge connects but Flipper buttons do nothing (BLE) | Update the Flipper app — an older build may have a race in `transport_bt.c` where `bt_set_status_changed_callback` was registered after advertising, causing `bt->connected` to stay `false`. Rebuild with `ufbt build && ufbt launch`. |
-| Bridge manual session: Flipper connects but no Claude interaction | Send `claude_connect` via IPC: `echo '{"action":"claude_connect","project_dir":"'$(pwd)'"}' \| nc -U /tmp/<agent>-flipper-bridge.sock`. When running through the plugin, this is handled automatically by `on-session-start.sh`. |
+| Bridge manual session: Flipper connects but no agent interaction | Send `claude_connect` via IPC: `echo '{"action":"claude_connect","project_dir":"'$(pwd)'"}' \| nc -U /tmp/claude-flipper-bridge.sock`. When running through a plugin, this is handled automatically. |
 | No sound on task complete | Check bridge log: `tail -f /tmp/<agent>-flipper-bridge.log` |
 | Buttons do nothing (macOS) | Grant Accessibility permission to your terminal app. Terminals like WezTerm, Alacritty, or Ghostty often don't prompt automatically — add them manually. |
 | Buttons do nothing (Linux X11) | Install `xdotool`; focus the terminal window. |
@@ -175,14 +197,16 @@ Bridge logs:
 | Claude Code | `/tmp/claude-flipper-bridge.log` |
 | Codex | `/tmp/codex-flipper-bridge.log` |
 | Cursor | `/tmp/cursor-flipper-bridge.log` |
+| OpenCode | `/tmp/claude-flipper-bridge.log` |
 
 ## Repository layout
 
 ```
-flipper-app/              Flipper Zero FAP (C)
-plugin/                   Claude Code plugin + host bridge
-flipper-codex-buddy/      Codex plugin + host bridge
-flipper-cursor-buddy/     Cursor hooks + host bridge
+flipper-app/                Flipper Zero FAP (C)
+plugin/                     Claude Code plugin + host bridge
+flipper-codex-buddy/        Codex plugin + host bridge
+flipper-cursor-buddy/       Cursor hooks + host bridge
+flipper-opencode-buddy/     OpenCode plugin + host bridge
 ```
 
 ## Development

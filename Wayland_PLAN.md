@@ -104,6 +104,10 @@ def _is_wayland() -> bool:
 claude --resume 53106784-65b3-4ae5-9045-fb7b5bf36ec4
 claude --resume 8e7903d3-bc4b-40c4-804b-592b177d2732
 claude --resume 7d2e03e9-6d00-4402-b187-e63c2a945aad
+bluetooth tx fix
+claude --resume 532010a7-300f-447c-9196-c4f970060245
 
 **Opencode Sessions**
 opencode -s ses_05ea09482ffexasQaas67eEy44
+opencode bridge
+opencode -s ses_05183592cffecCLsKrzX4lrkeV
