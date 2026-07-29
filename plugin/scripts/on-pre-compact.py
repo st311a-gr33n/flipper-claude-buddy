@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreCompact hook: compaction LED + context-aware character animation."""
+"""PreCompact hook: start cyan LED blink on Flipper while context is being compacted."""
 
 import json
 import os
@@ -7,7 +7,6 @@ import socket
 import sys
 
 SOCKET_PATH = "/tmp/claude-flipper-bridge.sock"
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def send_to_flipper(sound: str, vibro: bool, text: str, subtext: str = "") -> None:
@@ -24,13 +23,8 @@ def main():
     if not os.path.exists(SOCKET_PATH):
         sys.exit(0)
 
-    payload = sys.stdin.read()
     try:
         send_to_flipper("led_compact", False, "Compacting...")
-        if payload.strip():
-            proc = os.popen(f"python3 {SCRIPT_DIR}/context_usage.py pre_compact", "w")
-            proc.write(payload)
-            proc.close()
     except Exception:
         pass
 

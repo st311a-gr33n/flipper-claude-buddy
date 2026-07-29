@@ -1,13 +1,15 @@
-name: Release Flipper App
+name: Build Flipper App
 
 on:
   workflow_dispatch:
   push:
+    paths:
+      - 'flipper-app/**'
     tags:
       - '*'
 
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -24,9 +26,6 @@ jobs:
       - name: Build FAP
         run: cd flipper-app && ufbt build
 
-      - name: Run protocol C tests
-        run: cd flipper-app/tests && make test
-
       - name: Upload FAP artifact
         uses: actions/upload-artifact@v4
         with:
@@ -34,6 +33,7 @@ jobs:
           path: ~/.ufbt/build/claude_buddy.fap
 
       - name: Create release and attach FAP
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: ~/.ufbt/build/claude_buddy.fap

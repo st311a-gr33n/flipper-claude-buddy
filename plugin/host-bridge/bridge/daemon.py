@@ -58,9 +58,9 @@ class Daemon:
             await self.serial.send(
                 protocol.notify_msg("ready", vibro=True, text="Claude Code", subtext="Connected")
             )
-            await self.serial.send(
-                protocol.state_msg(self._claude_connected, config.HOST_TYPE)
-            )
+            # Restore Claude state if already connected
+            if self._claude_connected:
+                await self.serial.send(protocol.state_msg(True))
             # Send command menu
             commands = self._load_commands()
             if commands:
@@ -169,7 +169,7 @@ class Daemon:
                     log.debug("Sending menu (%d commands, %d bytes)", len(commands), len(menu_bytes))
                     await self.serial.send(menu_bytes)
                 if self._claude_connected:
-                    await self.serial.send(protocol.state_msg(True, config.HOST_TYPE))
+                    await self.serial.send(protocol.state_msg(True))
 
     async def _handle_ipc_action(self, request: dict) -> dict:
         action = request.get("action", "")
@@ -191,16 +191,6 @@ class Daemon:
             await self.serial.send(protocol.status_msg(text, sub))
             return {"status": "ok"}
 
-        elif action == "usage":
-            await self.serial.send(
-                protocol.usage_msg(
-                    context_pct=request.get("context_pct"),
-                    session_pct=request.get("session_pct"),
-                    compact_level=request.get("compact_level"),
-                )
-            )
-            return {"status": "ok"}
-
         elif action == "claude_connect":
             # Update project dir if provided (may differ from bridge startup)
             project_dir = request.get("project_dir", "")
@@ -208,7 +198,7 @@ class Daemon:
                 config.PROJECT_DIR = project_dir
                 log.info("Updated PROJECT_DIR to %s", project_dir)
             self._claude_connected = True
-            await self.serial.send(protocol.state_msg(True, config.HOST_TYPE))
+            await self.serial.send(protocol.state_msg(True))
             # Refresh commands for the (possibly new) project
             commands = self._load_commands()
             if commands and self.serial.connected:
@@ -218,7 +208,7 @@ class Daemon:
         elif action == "claude_disconnect":
             await self._stop_space_repeat()
             self._claude_connected = False
-            await self.serial.send(protocol.state_msg(False, config.HOST_TYPE))
+            await self.serial.send(protocol.state_msg(False))
             return {"status": "ok"}
 
         elif action == "register_target":
@@ -380,18 +370,9 @@ class Daemon:
         # Build truncated->full mapping; Flipper menu items are 26 chars max
         MENU_ITEM_MAX = 26
         self._cmd_map = {}
-        collisions = []
         for cmd in commands:
             truncated = cmd[:MENU_ITEM_MAX]
-            if truncated in self._cmd_map and self._cmd_map[truncated] != cmd:
-                collisions.append((truncated, self._cmd_map[truncated], cmd))
             self._cmd_map[truncated] = cmd
-        for trunc, existing, new_cmd in collisions:
-            log.warning(
-                "Menu collision: %r and %r both truncate to %r — "
-                "rename one to stay unique within 26 chars",
-                existing, new_cmd, trunc,
-            )
 
         result = sorted(self._cmd_map.keys())
         custom_count = len(result) - len(self.BUILTIN_COMMANDS)

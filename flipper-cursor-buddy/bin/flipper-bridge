@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-# Self-locating wrapper for bridge-control.py (works from repo or marketplace cache).
-set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export PLUGIN_ROOT="$ROOT"
-exec python3 "$ROOT/scripts/bridge-control.py" "$@"

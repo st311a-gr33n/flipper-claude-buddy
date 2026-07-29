@@ -139,12 +139,7 @@ class NullDictationBackend(DictationBackend):
 # ---------------------------------------------------------------------------
 
 async def _run_shell(cmd: str) -> None:
-    """Run *cmd* in a shell, logging any errors.
-
-    Security note: *cmd* must come from trusted, operator-controlled
-    configuration (environment variables set by the user). Never pass
-    Flipper-originated or network-supplied strings to this function.
-    """
+    """Run *cmd* in a shell, logging any errors."""
     try:
         proc = await asyncio.create_subprocess_shell(
             cmd,

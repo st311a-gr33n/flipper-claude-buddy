@@ -1,6 +1,6 @@
 {
   "name": "flipper-claude-buddy",
-  "description": "Flipper Zero as a physical remote and feedback device for Claude Code. Sound, vibration, display animations, and host identification over USB or BLE.",
+  "description": "Flipper Zero as a physical remote control and feedback device for Claude Code. Provides sound, vibration, and display feedback on a Flipper Zero connected via USB.",
   "version": "0.6.0",
   "author": {
     "name": "jxw1102"
