@@ -121,23 +121,14 @@ To inspect bridge activity: `tail -f /tmp/claude-flipper-bridge.log`
 | Feature | macOS | Linux |
 |---------|-------|-------|
 | USB transport | `/dev/cu.usbmodem*` | `/dev/ttyACM*` (auto-detected) |
-<<<<<<< HEAD
 | BLE transport | ✓ | functional (BlueZ via `bleak`) |
 | Keystroke forwarding | AppleScript (`osascript`) | auto-detected: `ydotool` (Wayland), `wtype` (wlroots), or `xdotool` (X11) |
 | Wayland keystroke | ✗ | `ydotool` (any compositor) or `wtype` (wlroots only) |
 | Dictation | macOS native | disabled by default; `FLIPPER_DICTATION_BACKEND=custom` |
 
 On Linux, `WINDOWID` (VTE terminals like gnome-terminal and kitty) is used by `xdotool` to focus the correct window on X11. On Wayland, `WINDOWID` is not set and window focusing is not available — the terminal must have keyboard focus.
-=======
-| BLE transport | ✓ | not yet supported |
-| Keystroke forwarding | AppleScript (`osascript`) | `xdotool` (X11 only; install via `apt install xdotool`) |
-| Wayland keystroke | ✗ | not yet supported (`ydotool` needed) |
-| Dictation | macOS native (`FLIPPER_DICTATION_BACKEND=macos`) | disabled by default; use `FLIPPER_DICTATION_BACKEND=custom` |
-
-On Linux, `WINDOWID` (set by VTE-based terminals like gnome-terminal and kitty) is used by `xdotool` to focus the correct window. If `WINDOWID` is not set, keystrokes go to the active window.
 
 The bridge daemon, IPC socket, and all hook scripts are otherwise platform-agnostic.
->>>>>>> fd484a53b8e6590cf9c9f679511e116bab1468b7
 
 ## Command Menu System
 

@@ -43,6 +43,12 @@ static void bridge_rx_cb(const uint8_t* data, uint16_t len, void* context) {
     BtTransport* bt = context;
     if(!bt || !data) return;
 
+    /* Receiving data proves the BLE link is up.  Set connected=true as a
+     * fallback — some firmware versions don't fire BtStatusConnected when
+     * using a custom (non-RPC) profile, so bt->connected would otherwise
+     * stay false and bt_send() would silently drop every outgoing frame. */
+    bt->connected = true;
+
     FURI_LOG_D(TAG, "RX chunk: %u bytes", len);
 
     /* Line-buffer incoming data, dispatch complete lines.
@@ -154,7 +160,7 @@ static void bt_send(Transport* t, const char* data, int len) {
     if(!t || !data) return;
     BtTransport* bt = (BtTransport*)t;
     if(!bt->profile || !bt->connected) {
-        FURI_LOG_D(TAG, "bt_send dropped %d bytes (profile=%d connected=%d)",
+        FURI_LOG_W(TAG, "bt_send dropped %d bytes (profile=%d connected=%d)",
                    len, !!bt->profile, !!bt->connected);
         return;
     }
